@@ -25,14 +25,6 @@ async function request<T>(method: string, path: string, body?: unknown, token?: 
   return res.json() as Promise<T>;
 }
 
-export const apiGet = <T>(path: string, token?: string) => request<T>('GET', path, undefined, token);
-export const apiPost = <T>(path: string, body: unknown, token?: string) =>
-  request<T>('POST', path, body, token);
-
-export type Health = { status: string };
-
-export const getHealth = () => apiGet<Health>('/health');
-
 export type User = {
   id: string;
   name: string;
@@ -43,13 +35,10 @@ export type User = {
 
 export type LoginResponse = {
   access_token: string;
-  token_type: 'bearer';
   user: User;
-  is_new_user: boolean;
 };
 
 export const loginWithGoogle = (idToken: string, timezone: string | null) =>
-  apiPost<LoginResponse>('/auth/google', { id_token: idToken, timezone });
+  request<LoginResponse>('POST', '/auth/google', { id_token: idToken, timezone });
 
-export const getMe = (token: string) => apiGet<User>('/auth/me', token);
-// this is a test commit
+export const getMe = (token: string) => request<User>('GET', '/auth/me', undefined, token);
