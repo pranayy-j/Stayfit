@@ -7,6 +7,7 @@ from typesafe_sdk import TypeSafeError
 from app.db import SessionLocal
 from app.main import app
 from app.models import User
+from app.schemas.voice_update import MAX_TRANSCRIPT_CHARS
 from app.services import eating_classifier
 from app.services.token_service import create_access_token
 
@@ -65,7 +66,16 @@ def test_voice_update_validates_body() -> None:
     headers = auth_header()
     missing_ts = {"voice-transcript": "hi"}
     naive_ts = {**PAYLOAD, "timestamp": "2026-10-20T07:30:00"}
-    too_long = {**PAYLOAD, "voice-transcript": "x" * 10_001}
     empty = {**PAYLOAD, "voice-transcript": ""}
-    for body in (missing_ts, naive_ts, too_long, empty):
+    for body in (missing_ts, naive_ts, empty):
         assert client.post("/v1/voice-update", json=body, headers=headers).status_code == 422
+
+
+def test_voice_update_too_long_transcript(jev_probability: dict) -> None:
+    headers = auth_header()
+    at_limit = {**PAYLOAD, "voice-transcript": "x" * MAX_TRANSCRIPT_CHARS}
+    over = {**PAYLOAD, "voice-transcript": "x" * (MAX_TRANSCRIPT_CHARS + 1)}
+    assert client.post("/v1/voice-update", json=at_limit, headers=headers).status_code == 200
+    res = client.post("/v1/voice-update", json=over, headers=headers)
+    assert res.status_code == 413
+    assert res.json() == {"detail": "Transcript too long"}

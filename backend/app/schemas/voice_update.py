@@ -2,8 +2,8 @@ from typing import Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
-# ~1000 words of speech is roughly 6-7k characters; leave headroom.
-MAX_TRANSCRIPT_CHARS = 10_000
+# ~250 words of speech.
+MAX_TRANSCRIPT_CHARS = 1_500
 
 
 class VoiceUpdateRequest(BaseModel):
@@ -12,8 +12,10 @@ class VoiceUpdateRequest(BaseModel):
     voice_transcript: str = Field(
         alias="voice-transcript",
         min_length=1,
-        max_length=MAX_TRANSCRIPT_CHARS,
-        description="What the user said, transcribed. Up to ~1000 words.",
+        # Enforced in the controller (413 "Transcript too long") rather than by Pydantic, so the
+        # FE gets a clear message; still advertised in the OpenAPI schema.
+        json_schema_extra={"maxLength": MAX_TRANSCRIPT_CHARS},
+        description=f"What the user said, transcribed. Up to {MAX_TRANSCRIPT_CHARS} characters.",
         examples=["Had two boiled eggs and black coffee for breakfast."],
     )
     timestamp: AwareDatetime = Field(
