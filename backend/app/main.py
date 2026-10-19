@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.controllers import auth, health, voice_update
+from app.db import async_engine
 from app.services import eating_classifier
 
 
@@ -12,6 +13,7 @@ from app.services import eating_classifier
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     yield
     await eating_classifier.close_client()
+    await async_engine.dispose()
 
 
 app = FastAPI(title="StayFit API", lifespan=lifespan)
