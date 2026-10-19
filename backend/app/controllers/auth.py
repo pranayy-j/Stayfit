@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.controllers.deps import get_auth_service, get_current_user
 from app.models import User
 from app.schemas.auth import GoogleLoginRequest, LoginResponse
+from app.schemas.common import UNAUTHORIZED
 from app.schemas.user import UserOut
 from app.services.auth_service import AuthService
 from app.services.google_auth import InvalidGoogleToken
@@ -12,10 +13,10 @@ from app.services.google_auth import InvalidGoogleToken
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-@router.post("/google", response_model=LoginResponse)
+@router.post("/google", responses=UNAUTHORIZED)
 def login_with_google(
     body: GoogleLoginRequest, auth: Annotated[AuthService, Depends(get_auth_service)]
-):
+) -> LoginResponse:
     try:
         result = auth.login_with_google(body.id_token, body.timezone)
     except InvalidGoogleToken as e:
@@ -28,6 +29,6 @@ def login_with_google(
     )
 
 
-@router.get("/me", response_model=UserOut)
-def me(user: Annotated[User, Depends(get_current_user)]):
-    return user
+@router.get("/me", responses=UNAUTHORIZED)
+def me(user: Annotated[User, Depends(get_current_user)]) -> UserOut:
+    return UserOut.model_validate(user)

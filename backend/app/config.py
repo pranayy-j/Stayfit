@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     jwt_secret: str = "dev-only-insecure-secret"
     jwt_expire_days: int = 30
 
+    # TypeSafe AI key for JEV (transcript classification).
+    typesafe_api_key: str | None = None
+
     @field_validator("database_url", "database_url_unpooled")
     @classmethod
     def _use_psycopg_driver(cls, url: str | None) -> str | None:
