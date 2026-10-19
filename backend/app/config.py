@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     # TypeSafe AI key for JEV (transcript classification).
     typesafe_api_key: str | None = None
 
+    # Anthropic key for Claude (food extraction).
+    anthropic_api_key: str | None = None
+
     @field_validator("database_url", "database_url_unpooled")
     @classmethod
     def _use_psycopg_driver(cls, url: str | None) -> str | None:
