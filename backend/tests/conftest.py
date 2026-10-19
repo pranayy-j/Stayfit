@@ -42,4 +42,4 @@ def _migrated_db() -> None:
 def _clean_tables() -> None:
     yield
     with engine.begin() as conn:
-        conn.execute(text("TRUNCATE users"))
+        conn.execute(text("TRUNCATE users, voice_updates"))
