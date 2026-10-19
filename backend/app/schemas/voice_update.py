@@ -1,3 +1,5 @@
+import uuid
+from datetime import datetime
 from typing import Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
@@ -25,5 +27,9 @@ class VoiceUpdateRequest(BaseModel):
 
 
 class VoiceUpdateResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID = Field(description="ID of the stored voice update.")
     status: Literal["received"] = "received"
+    created_at: datetime = Field(description="When the server stored the update (UTC).")
     is_eating_update: bool = Field(description="True if the transcript describes the user eating.")

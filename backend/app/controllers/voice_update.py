@@ -2,11 +2,11 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from typesafe_sdk import TypeSafeError
 
 from app.controllers.deps import get_current_user
-from app.db import get_db
+from app.db import get_async_db
 from app.models import User
 from app.schemas.common import UNAUTHORIZED, ErrorResponse
 from app.schemas.voice_update import (
@@ -21,7 +21,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1", tags=["voice"])
 
 
-def get_voice_update_service(db: Annotated[Session, Depends(get_db)]) -> VoiceUpdateService:
+def get_voice_update_service(
+    db: Annotated[AsyncSession, Depends(get_async_db)],
+) -> VoiceUpdateService:
     return VoiceUpdateService(db)
 
 
@@ -41,8 +43,8 @@ async def voice_update(
     if len(body.voice_transcript) > MAX_TRANSCRIPT_CHARS:
         raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, "Transcript too long")
     try:
-        is_eating_update = await service.process(user, body.voice_transcript, body.timestamp)
+        voice_update = await service.process(user, body.voice_transcript, body.timestamp)
     except TypeSafeError as e:
         logger.exception("JEV classification failed for user %s", user.id)
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Transcript classification failed") from e
-    return VoiceUpdateResponse(is_eating_update=is_eating_update)
+    return VoiceUpdateResponse.model_validate(voice_update)
