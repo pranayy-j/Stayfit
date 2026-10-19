@@ -9,7 +9,11 @@ from app.controllers.deps import get_current_user
 from app.db import get_db
 from app.models import User
 from app.schemas.common import UNAUTHORIZED, ErrorResponse
-from app.schemas.voice_update import VoiceUpdateRequest, VoiceUpdateResponse
+from app.schemas.voice_update import (
+    MAX_TRANSCRIPT_CHARS,
+    VoiceUpdateRequest,
+    VoiceUpdateResponse,
+)
 from app.services.voice_update_service import VoiceUpdateService
 
 logger = logging.getLogger(__name__)
@@ -25,6 +29,7 @@ def get_voice_update_service(db: Annotated[Session, Depends(get_db)]) -> VoiceUp
     "/voice-update",
     responses={
         **UNAUTHORIZED,
+        413: {"model": ErrorResponse, "description": "Transcript too long"},
         502: {"model": ErrorResponse, "description": "Transcript classification failed"},
     },
 )
@@ -33,6 +38,8 @@ async def voice_update(
     user: Annotated[User, Depends(get_current_user)],
     service: Annotated[VoiceUpdateService, Depends(get_voice_update_service)],
 ) -> VoiceUpdateResponse:
+    if len(body.voice_transcript) > MAX_TRANSCRIPT_CHARS:
+        raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, "Transcript too long")
     try:
         is_eating_update = await service.process(user, body.voice_transcript, body.timestamp)
     except TypeSafeError as e:
