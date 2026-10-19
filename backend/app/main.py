@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.controllers import auth, health
+from app.controllers import auth, health, voice_update
 
 app = FastAPI(title="StayFit API")
 
@@ -14,3 +14,4 @@ app.add_middleware(
 
 app.include_router(health.router)
 app.include_router(auth.router)
+app.include_router(voice_update.router)
