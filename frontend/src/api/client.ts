@@ -52,3 +52,4 @@ export const loginWithGoogle = (idToken: string, timezone: string | null) =>
   apiPost<LoginResponse>('/auth/google', { id_token: idToken, timezone });
 
 export const getMe = (token: string) => apiGet<User>('/auth/me', token);
+// this is a test commit
