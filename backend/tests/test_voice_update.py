@@ -4,13 +4,13 @@ from datetime import UTC, datetime
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
-from typesafe_sdk import TypeSafeError
 
 from app.db import SessionLocal
 from app.main import app
 from app.models import User, VoiceUpdate
 from app.schemas.voice_update import MAX_TRANSCRIPT_CHARS
 from app.services import eating_classifier
+from app.services.eating_classifier import ClassificationError
 from app.services.token_service import create_access_token
 
 client = TestClient(app)
@@ -73,7 +73,7 @@ def test_voice_update_at_or_below_threshold_is_not(jev_probability: dict, p: flo
 
 def test_voice_update_jev_failure_returns_502(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fail(_: str) -> float:
-        raise TypeSafeError("boom")
+        raise ClassificationError("boom")
 
     monkeypatch.setattr(eating_classifier, "eating_update_probability", fail)
     res = client.post("/v1/voice-update", json=PAYLOAD, headers=auth_header())

@@ -24,6 +24,8 @@ Requests flow `controllers → services → repositories`; each layer only calls
   service, map results and domain errors to responses/status codes.
 - `app/services/` — business logic and external integrations (Google, JWT). Owns transactions
   (`commit`/`rollback`); knows nothing about HTTP.
+- `app/workflows/` — LangGraph pipelines for multi-step AI flows (e.g. voice update: classify →
+  store). Nodes call services/repositories; the calling service owns the transaction.
 - `app/repositories/` — database access (queries, `add`/`flush`). No business rules, no commits.
 - `app/models/` — SQLAlchemy ORM tables. `app/schemas/` — Pydantic request/response models.
 

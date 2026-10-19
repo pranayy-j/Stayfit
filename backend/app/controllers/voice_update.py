@@ -3,7 +3,6 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from typesafe_sdk import TypeSafeError
 
 from app.controllers.deps import get_current_user
 from app.db import get_async_db
@@ -14,6 +13,7 @@ from app.schemas.voice_update import (
     VoiceUpdateRequest,
     VoiceUpdateResponse,
 )
+from app.services.eating_classifier import ClassificationError
 from app.services.voice_update_service import VoiceUpdateService
 
 logger = logging.getLogger(__name__)
@@ -44,7 +44,7 @@ async def voice_update(
         raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, "Transcript too long")
     try:
         voice_update = await service.process(user, body.voice_transcript, body.timestamp)
-    except TypeSafeError as e:
+    except ClassificationError as e:
         logger.exception("JEV classification failed for user %s", user.id)
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Transcript classification failed") from e
     return VoiceUpdateResponse.model_validate(voice_update)

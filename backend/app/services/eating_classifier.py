@@ -1,6 +1,13 @@
 import logging
 
-from typesafe_sdk import AsyncTypeSafeClient, Noul
+from langchain_core.runnables import Runnable
+from langchain_typesafe import ClassifierRequest, ClassifierResponse, Noul, TypeSafeClassifier
+from langchain_typesafe.client import (
+    TypeSafeAPIConnectionError,
+    TypeSafeError,
+    TypeSafeInternalServerError,
+    TypeSafeRateLimitError,
+)
 
 from app.config import settings
 
@@ -13,31 +20,58 @@ If its a long text even with very less statement containing food update that ful
 # JEV's noul is P(yes) in [0, 1]; strictly above this counts as an eating update.
 EATING_UPDATE_THRESHOLD = 0.75
 
-# One shared client (and connection pool) per process, created on first use inside the
-# running event loop and closed on app shutdown.
-_client: AsyncTypeSafeClient | None = None
+TIMEOUT_SECONDS = 10.0
+# Retry only transient failures (network, timeouts, 429, 5xx); a bad key or request won't heal.
+RETRYABLE_ERRORS = (TypeSafeAPIConnectionError, TypeSafeRateLimitError, TypeSafeInternalServerError)
+MAX_ATTEMPTS = 3
 
 
-def _get_client() -> AsyncTypeSafeClient:
-    global _client
-    if _client is None:
-        _client = AsyncTypeSafeClient(api_key=settings.typesafe_api_key)
-    return _client
+class ClassificationError(Exception):
+    """JEV could not classify the transcript (misconfiguration or API failure)."""
+
+
+# One long-lived classifier (and HTTP connection pool) per process, created on first use so
+# a missing API key fails the request rather than app startup; closed on app shutdown.
+_classifier: TypeSafeClassifier | None = None
+_runnable: Runnable[ClassifierRequest, ClassifierResponse] | None = None
+
+
+def _get_runnable() -> Runnable[ClassifierRequest, ClassifierResponse]:
+    global _classifier, _runnable
+    if _runnable is None:
+        try:
+            _classifier = TypeSafeClassifier(
+                api_key=settings.typesafe_api_key or "", timeout=TIMEOUT_SECONDS
+            )
+        except ValueError as e:  # raised for a missing API key
+            raise ClassificationError(str(e)) from e
+        _runnable = _classifier.with_retry(
+            retry_if_exception_type=RETRYABLE_ERRORS,
+            wait_exponential_jitter=True,
+            stop_after_attempt=MAX_ATTEMPTS,
+        )
+    return _runnable
 
 
 async def close_client() -> None:
-    global _client
-    if _client is not None:
-        await _client.aclose()
-        _client = None
+    global _classifier, _runnable
+    if _classifier is not None and _classifier.async_client is not None:
+        await _classifier.async_client.aclose()
+    _classifier = _runnable = None
 
 
 async def eating_update_probability(transcript: str) -> float:
-    """Ask JEV how likely the transcript is an eating update. Raises TypeSafeError on failure."""
-    response = await _get_client().system_one(
-        state=transcript,
-        questions={"is_eating_update": Noul(instructions=EATING_UPDATE_CRITERIA)},
-    )
+    """Ask JEV how likely the transcript is an eating update. Raises ClassificationError."""
+    try:
+        response = await _get_runnable().ainvoke(
+            {
+                "state": transcript,
+                "questions": {"is_eating_update": Noul(instructions=EATING_UPDATE_CRITERIA)},
+            },
+            config={"run_name": "eating_update_classifier"},
+        )
+    except TypeSafeError as e:
+        raise ClassificationError(str(e)) from e
     probability = response.nouls["is_eating_update"].noul
     logger.debug("JEV eating-update probability=%.3f model=%s", probability, response.model)
     return probability
