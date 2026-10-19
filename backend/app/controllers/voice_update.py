@@ -14,6 +14,7 @@ from app.schemas.voice_update import (
     VoiceUpdateResponse,
 )
 from app.services.eating_classifier import ClassificationError
+from app.services.food_extractor import ExtractionError
 from app.services.voice_update_service import VoiceUpdateService
 
 logger = logging.getLogger(__name__)
@@ -32,7 +33,7 @@ def get_voice_update_service(
     responses={
         **UNAUTHORIZED,
         413: {"model": ErrorResponse, "description": "Transcript too long"},
-        502: {"model": ErrorResponse, "description": "Transcript classification failed"},
+        502: {"model": ErrorResponse, "description": "JEV or Claude call failed"},
     },
 )
 async def voice_update(
@@ -43,8 +44,18 @@ async def voice_update(
     if len(body.voice_transcript) > MAX_TRANSCRIPT_CHARS:
         raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, "Transcript too long")
     try:
-        voice_update = await service.process(user, body.voice_transcript, body.timestamp)
+        result = await service.process(user, body.voice_transcript, body.timestamp)
     except ClassificationError as e:
         logger.exception("JEV classification failed for user %s", user.id)
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Transcript classification failed") from e
-    return VoiceUpdateResponse.model_validate(voice_update)
+    except ExtractionError as e:
+        logger.exception("Claude food extraction failed for user %s", user.id)
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Food extraction failed") from e
+
+    vu = result.voice_update
+    return VoiceUpdateResponse(
+        id=vu.id,
+        created_at=vu.created_at,
+        is_eating_update=vu.is_eating_update,
+        eating_status=result.eating_status,
+    )

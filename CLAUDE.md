@@ -39,7 +39,7 @@ Run tests and ruff before declaring a backend task done.
 
 ## Testing
 - Tests use a local `stayfit_test` Postgres DB, never Neon (`tests/conftest.py` pins the URLs).
-- Never call real external APIs (Google, JEV) in tests. Stub them, or use an `httpx2.MockTransport`.
+- Never call real external APIs (Google, JEV, Claude) in tests. Stub them, or use an `httpx2.MockTransport`.
 
 ## Git
 - Never commit directly to `main`. Branch, push, and open a PR.

@@ -33,3 +33,10 @@ class VoiceUpdateResponse(BaseModel):
     status: Literal["received"] = "received"
     created_at: datetime = Field(description="When the server stored the update (UTC).")
     is_eating_update: bool = Field(description="True if the transcript describes the user eating.")
+    eating_status: Literal["logged", "needs_detail"] | None = Field(
+        default=None,
+        description=(
+            "logged: food items were found. needs_detail: sounded like eating but no specific "
+            "food was named; ask the user what they ate. null: not an eating update."
+        ),
+    )

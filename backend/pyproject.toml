@@ -15,6 +15,7 @@ dependencies = [
     "requests>=2.34.2",
     "langchain-typesafe>=0.0.1a3",
     "langgraph>=1.2.16",
+    "langchain-anthropic>=1.7.6",
 ]
 
 [dependency-groups]
