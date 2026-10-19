@@ -1,10 +1,13 @@
 import os
 from pathlib import Path
 
-# Must be set before app.config is imported.
-os.environ.setdefault(
-    "DATABASE_URL", "postgresql+psycopg://stayfit:stayfit@localhost:5432/stayfit_test"
+# Must be set before app.config is imported. Both URLs are pinned so tests (which truncate
+# tables) never touch the Neon database configured in .env.local.
+TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL", "postgresql+psycopg://stayfit:stayfit@localhost:5432/stayfit_test"
 )
+os.environ["DATABASE_URL"] = TEST_DATABASE_URL
+os.environ["DATABASE_URL_UNPOOLED"] = TEST_DATABASE_URL
 
 import pytest  # noqa: E402
 from alembic.config import Config  # noqa: E402

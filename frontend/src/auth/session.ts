@@ -1,57 +1,49 @@
-import {
-  GoogleSignin,
-  isErrorWithCode,
-  isSuccessResponse,
-  statusCodes,
-} from '@react-native-google-signin/google-signin';
 import { getCalendars } from 'expo-localization';
 import * as SecureStore from 'expo-secure-store';
+import { Platform } from 'react-native';
 
 import { ApiError, getMe, loginWithGoogle, type User } from '../api/client';
-import { GOOGLE_IOS_CLIENT_ID, GOOGLE_WEB_CLIENT_ID } from '../config';
+import { signOutOfGoogle } from './google';
 
 const TOKEN_KEY = 'stayfit.accessToken';
 
-GoogleSignin.configure({
-  webClientId: GOOGLE_WEB_CLIENT_ID,
-  iosClientId: GOOGLE_IOS_CLIENT_ID,
-});
+// expo-secure-store has no web implementation, so the web build keeps the token in localStorage.
+const tokenStore =
+  Platform.OS === 'web'
+    ? {
+        get: async () => localStorage.getItem(TOKEN_KEY),
+        set: async (token: string) => localStorage.setItem(TOKEN_KEY, token),
+        clear: async () => localStorage.removeItem(TOKEN_KEY),
+      }
+    : {
+        get: () => SecureStore.getItemAsync(TOKEN_KEY),
+        set: (token: string) => SecureStore.setItemAsync(TOKEN_KEY, token),
+        clear: () => SecureStore.deleteItemAsync(TOKEN_KEY),
+      };
 
 /** Returns the signed-in user, or null if there is no valid saved session. */
 export async function restoreSession(): Promise<User | null> {
-  const token = await SecureStore.getItemAsync(TOKEN_KEY);
+  const token = await tokenStore.get();
   if (!token) return null;
   try {
     return await getMe(token);
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) {
-      await SecureStore.deleteItemAsync(TOKEN_KEY);
+      await tokenStore.clear();
     }
     return null;
   }
 }
 
-/** Runs the Google sign-in flow; returns null if the user cancelled. */
-export async function signInWithGoogle(): Promise<User | null> {
-  try {
-    await GoogleSignin.hasPlayServices();
-    const response = await GoogleSignin.signIn();
-    if (!isSuccessResponse(response)) return null;
-
-    const { idToken } = response.data;
-    if (!idToken) throw new Error('Google did not return an ID token');
-
-    const timezone = getCalendars()[0]?.timeZone ?? null;
-    const { access_token, user } = await loginWithGoogle(idToken, timezone);
-    await SecureStore.setItemAsync(TOKEN_KEY, access_token);
-    return user;
-  } catch (e) {
-    if (isErrorWithCode(e) && e.code === statusCodes.IN_PROGRESS) return null;
-    throw e;
-  }
+/** Exchanges a Google ID token for our own session token and saves it. */
+export async function signInWithGoogleIdToken(idToken: string): Promise<User> {
+  const timezone = getCalendars()[0]?.timeZone ?? null;
+  const { access_token, user } = await loginWithGoogle(idToken, timezone);
+  await tokenStore.set(access_token);
+  return user;
 }
 
 export async function signOut(): Promise<void> {
-  await SecureStore.deleteItemAsync(TOKEN_KEY);
-  await GoogleSignin.signOut();
+  await tokenStore.clear();
+  await signOutOfGoogle();
 }
