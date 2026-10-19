@@ -10,8 +10,8 @@ cp .env.example .env   # set EXPO_PUBLIC_API_URL and the Google client IDs
 npx expo run:ios       # or: npx expo run:android
 ```
 
-Google Sign-In uses native code, so the app **does not run in Expo Go** — use a development build
-(`npx expo run:ios|android` locally, or `eas build --profile development`). After the first build,
+Google Sign-In uses native code, so the app **does not run in Expo Go** — use a local development
+build (`npx expo run:ios|android`). After the first build,
 `npm start` is enough for JS changes. Rebuild after changing `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID`
 (it's baked into the iOS URL scheme via `app.config.ts`).
 
@@ -36,13 +36,3 @@ npm run typecheck
 npx expo-doctor
 ```
 
-## Deploy
-
-Builds and store submission go through [EAS](https://docs.expo.dev/eas/), configured in `eas.json`
-(`development`, `preview`, `production` profiles; set the real API URLs there):
-
-```bash
-npm install -g eas-cli && eas login
-eas build --platform all --profile production
-eas submit --platform all --profile production
-```

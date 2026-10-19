@@ -29,8 +29,6 @@ uv run alembic revision --autogenerate -m "describe change"   # after editing ap
 uv run alembic upgrade head
 ```
 
-The Docker image runs `alembic upgrade head` on start.
-
 ## Test & lint
 
 Tests run against a local Postgres (`docker compose up -d`), never Neon: `tests/conftest.py`
@@ -41,14 +39,3 @@ uv run pytest
 uv run ruff check . && uv run ruff format --check .
 ```
 
-## Deploy
-
-The `Dockerfile` builds a standalone image that listens on `$PORT` (default 8000), so it runs on
-any container host (Render, Railway, Fly.io, Cloud Run, ECS…):
-
-```bash
-docker build -t stayfit-backend .
-docker run -p 8000:8000 --env-file .env stayfit-backend
-```
-
-Settings are read from environment variables (see `app/config.py`).

@@ -3,12 +3,12 @@ An end to end food-fitness tracker with insights.
 
 ## Repository layout
 
-| Folder | Stack | Deployed as |
-| --- | --- | --- |
-| [`frontend/`](frontend/README.md) | React Native (Expo, TypeScript) for iOS & Android | App Store / Play Store via EAS Build |
-| [`backend/`](backend/README.md) | Python 3.12, FastAPI, uv | Docker container |
+| Folder | Stack |
+| --- | --- |
+| [`frontend/`](frontend/README.md) | React Native (Expo, TypeScript) for iOS & Android |
+| [`backend/`](backend/README.md) | Python 3.12, FastAPI, uv |
 
-The two are independent projects with their own dependencies, and they're deployed separately.
+The two are independent projects with their own dependencies. Both run locally only for now.
 The app talks to the API over HTTP using `EXPO_PUBLIC_API_URL`.
 
 ## Quick start

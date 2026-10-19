@@ -1,4 +1,4 @@
-// EXPO_PUBLIC_* vars are inlined at build time. Set per environment in .env or eas.json.
+// EXPO_PUBLIC_* vars are inlined at build time. Set them in .env.
 export const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:8000';
 
 // The web client ID is what Google puts in the ID token's audience; the backend verifies it.
