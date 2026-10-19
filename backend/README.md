@@ -5,10 +5,11 @@ FastAPI service. Managed with [uv](https://docs.astral.sh/uv/), Python 3.12.
 ## Develop
 
 ```bash
-cp .env.example .env
-docker compose up -d          # local Postgres on :5432
+# from the repo root, once: links the Neon project and writes DATABASE_URL(_UNPOOLED) to .env.local
+neon deploy                   # or: neon env pull
+cp .env.example .env          # optional overrides (GOOGLE_CLIENT_IDS, JWT_SECRET…)
 uv sync
-uv run alembic upgrade head   # apply DB migrations
+uv run alembic upgrade head   # apply DB migrations (uses the direct, unpooled Neon URL)
 uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
@@ -32,7 +33,8 @@ The Docker image runs `alembic upgrade head` on start.
 
 ## Test & lint
 
-Tests need Postgres running (`docker compose up -d`); they use a separate `stayfit_test` database.
+Tests run against a local Postgres (`docker compose up -d`), never Neon: `tests/conftest.py`
+pins both database URLs to a `stayfit_test` database (override with `TEST_DATABASE_URL`).
 
 ```bash
 uv run pytest
