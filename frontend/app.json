@@ -23,6 +23,10 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "scheme": "stayfit"
+    "scheme": "stayfit",
+    "plugins": [
+      "expo-secure-store",
+      "expo-localization"
+    ]
   }
 }

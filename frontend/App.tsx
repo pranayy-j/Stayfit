@@ -1,23 +1,40 @@
 import { useEffect, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Button, StyleSheet, Text, View } from 'react-native';
 
-import { getHealth } from './src/api/client';
-import { API_URL } from './src/config';
+import type { User } from './src/api/client';
+import { restoreSession, signOut } from './src/auth/session';
+import LoginScreen from './src/screens/LoginScreen';
 
 export default function App() {
-  const [status, setStatus] = useState('checking…');
+  const [user, setUser] = useState<User | null>(null);
+  const [restoring, setRestoring] = useState(true);
 
   useEffect(() => {
-    getHealth()
-      .then((h) => setStatus(h.status))
-      .catch(() => setStatus('unreachable'));
+    restoreSession()
+      .then(setUser)
+      .finally(() => setRestoring(false));
   }, []);
+
+  const handleSignOut = async () => {
+    await signOut();
+    setUser(null);
+  };
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>StayFit</Text>
-      <Text>Backend ({API_URL}): {status}</Text>
+      {restoring ? (
+        <ActivityIndicator />
+      ) : user ? (
+        <>
+          <Text style={styles.title}>Hi, {user.name}</Text>
+          <Text>{user.email}</Text>
+          <Text style={styles.muted}>{user.timezone}</Text>
+          <Button title="Sign out" onPress={handleSignOut} />
+        </>
+      ) : (
+        <LoginScreen onSignedIn={setUser} />
+      )}
       <StatusBar style="auto" />
     </View>
   );
@@ -34,5 +51,9 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: '600',
     marginBottom: 8,
+  },
+  muted: {
+    color: '#666',
+    marginBottom: 24,
   },
 });

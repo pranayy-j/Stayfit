@@ -6,9 +6,14 @@ React Native app built with [Expo](https://docs.expo.dev/) (TypeScript), targeti
 
 ```bash
 npm install
-cp .env.example .env   # point EXPO_PUBLIC_API_URL at your backend
-npm start              # then press i (iOS simulator) / a (Android emulator), or scan with Expo Go
+cp .env.example .env   # set EXPO_PUBLIC_API_URL and the Google client IDs
+npx expo run:ios       # or: npx expo run:android
 ```
+
+Google Sign-In uses native code, so the app **does not run in Expo Go** — use a development build
+(`npx expo run:ios|android` locally, or `eas build --profile development`). After the first build,
+`npm start` is enough for JS changes. Rebuild after changing `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID`
+(it's baked into the iOS URL scheme via `app.config.ts`).
 
 When running on a device or Android emulator, `localhost` is not your machine — use your LAN IP
 (or `http://10.0.2.2:8000` on the Android emulator).

@@ -1,0 +1,17 @@
+# Local Postgres for development: `docker compose up -d`
+name: stayfit
+
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: stayfit
+      POSTGRES_PASSWORD: stayfit
+      POSTGRES_DB: stayfit
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
