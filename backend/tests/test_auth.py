@@ -1,9 +1,9 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.routes import auth as auth_routes
-from app.auth.google import InvalidGoogleToken
 from app.main import app
+from app.services import auth_service
+from app.services.google_auth import InvalidGoogleToken
 
 client = TestClient(app)
 
@@ -17,7 +17,7 @@ def fake_google(monkeypatch: pytest.MonkeyPatch) -> None:
             raise InvalidGoogleToken("bad signature")
         return GOOGLE_CLAIMS
 
-    monkeypatch.setattr(auth_routes, "verify_google_id_token", verify)
+    monkeypatch.setattr(auth_service, "verify_google_id_token", verify)
 
 
 def login(timezone: str | None = "Asia/Kolkata"):

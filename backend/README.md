@@ -16,6 +16,17 @@ uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 - API docs: http://localhost:8000/docs
 - Health check: http://localhost:8000/health
 
+## Layout
+
+Requests flow `controllers → services → repositories`; each layer only calls the one below it.
+
+- `app/controllers/` — FastAPI routers and dependencies. HTTP only: parse requests, call a
+  service, map results and domain errors to responses/status codes.
+- `app/services/` — business logic and external integrations (Google, JWT). Owns transactions
+  (`commit`/`rollback`); knows nothing about HTTP.
+- `app/repositories/` — database access (queries, `add`/`flush`). No business rules, no commits.
+- `app/models/` — SQLAlchemy ORM tables. `app/schemas/` — Pydantic request/response models.
+
 ## Auth
 
 The app signs in with Google natively, then sends the Google ID token to `POST /auth/google`.
