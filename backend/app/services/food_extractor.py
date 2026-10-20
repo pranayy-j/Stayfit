@@ -34,6 +34,24 @@ class ExtractedFoodItem(BaseModel):
         description="True when no quantity was said and one natural serving was assumed."
     )
     time: TimeReference
+    food_recognized: bool = Field(
+        description=(
+            "False when the name is not a food, dish or drink you recognise, e.g. a garbled or "
+            "made-up word like 'hcikuje'. Still list such a word as an item, name as said."
+        )
+    )
+    quantity_understood: bool = Field(
+        description=(
+            "False only when a quantity was said but cannot be interpreted even roughly. "
+            "An assumed default serving (nothing said) counts as understood."
+        )
+    )
+    time_understood: bool = Field(
+        description=(
+            "False only when a time was said but cannot be interpreted even roughly. "
+            "An assumed kind=now (nothing said) counts as understood."
+        )
+    )
 
 
 class FoodExtraction(BaseModel):
