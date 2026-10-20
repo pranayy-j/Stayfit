@@ -1,21 +1,31 @@
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Literal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import User, VoiceUpdate
 from app.workflows.voice_update_graph import (
-    EatingStatus,
     FoodItem,
+    MissingDetail,
     VoiceUpdateContext,
     voice_update_graph,
 )
 
 
+class NeedsDetailError(Exception):
+    """An eating update Claude could not fully understand; nothing was stored."""
+
+    def __init__(self, missing: list[MissingDetail], items: list[str]) -> None:
+        super().__init__(f"needs detail: {', '.join(missing)}")
+        self.missing = missing
+        self.items = items
+
+
 @dataclass(frozen=True)
 class VoiceUpdateResult:
     voice_update: VoiceUpdate
-    eating_status: EatingStatus | None
+    eating_status: Literal["logged"] | None
     food_items: list[FoodItem]
 
 
@@ -28,7 +38,8 @@ class VoiceUpdateService:
     ) -> VoiceUpdateResult:
         """Run the voice-update pipeline and commit.
 
-        Raises ClassificationError (JEV) or ExtractionError (Claude); nothing is stored then.
+        Raises ClassificationError (JEV), ExtractionError (Claude) or NeedsDetailError;
+        nothing is stored then.
         """
         state = await voice_update_graph.ainvoke(
             {
@@ -39,6 +50,9 @@ class VoiceUpdateService:
             },
             context=VoiceUpdateContext(db=self.db),
         )
+        if state["eating_status"] == "needs_detail":
+            # The graph stopped before staging anything, so there is nothing to roll back.
+            raise NeedsDetailError(state["missing_details"], state["unclear_items"])
         await self.db.commit()
         return VoiceUpdateResult(
             voice_update=state["voice_update"],

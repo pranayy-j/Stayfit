@@ -33,10 +33,28 @@ class VoiceUpdateResponse(BaseModel):
     status: Literal["received"] = "received"
     created_at: datetime = Field(description="When the server stored the update (UTC).")
     is_eating_update: bool = Field(description="True if the transcript describes the user eating.")
-    eating_status: Literal["logged", "needs_detail"] | None = Field(
+    eating_status: Literal["logged"] | None = Field(
         default=None,
         description=(
-            "logged: food items were found. needs_detail: sounded like eating but no specific "
-            "food was named; ask the user what they ate. null: not an eating update."
+            "logged: every food item was understood and recorded. null: not an eating update. "
+            "An eating update that needs more detail is a 422 NeedsDetailResponse instead."
         ),
+    )
+
+
+class NeedsDetailResponse(BaseModel):
+    """422 body when an eating update can't be fully understood. Nothing is stored."""
+
+    detail: Literal["needs_detail"] = "needs_detail"
+    missing: list[Literal["what", "when", "how_much"]] = Field(
+        description=(
+            "What to ask the user about. what: no food named, or a word that isn't a food. "
+            "when: a time that couldn't be understood. how_much: a quantity that couldn't be "
+            "understood."
+        ),
+        examples=[["what"]],
+    )
+    items: list[str] = Field(
+        description="The items, as said, that caused it. Empty when no food was named.",
+        examples=[["hcikuje"]],
     )

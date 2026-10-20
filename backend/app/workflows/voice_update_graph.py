@@ -1,7 +1,12 @@
 """LangGraph pipeline for a voice update.
 
-    START → classify_transcript ─┬─ eating ──→ extract_food_items ─┐
-                                 └─ not eating ────────────────────┴→ save_voice_update → END
+    START → classify_transcript ─┬─ eating ──→ extract_food_items ─┬─ logged ───────┐
+                                 │                                 └─ needs_detail ─┼→ END
+                                 └─ not eating ─────────────────────────────────────┴→ save → END
+
+An eating update is all or nothing: it is "logged" only when Claude understood what, when and
+how much for every item. Otherwise it is "needs_detail", no food item is kept and nothing is
+saved.
 
 Each node does one step and returns only the state keys it owns.
 """
@@ -18,9 +23,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import VoiceUpdate
 from app.repositories.voice_update_repository import VoiceUpdateRepository
 from app.services import eating_classifier, food_extractor
+from app.services.food_extractor import ExtractedFoodItem
 from app.services.meal_time import Meal, meal_at, resolve_consumed_at
 
 EatingStatus = Literal["logged", "needs_detail"]
+MissingDetail = Literal["what", "when", "how_much"]
 
 
 @dataclass(frozen=True)
@@ -45,6 +52,8 @@ class VoiceUpdateState(TypedDict):
     is_eating_update: NotRequired[bool]
     eating_status: NotRequired[EatingStatus | None]
     food_items: NotRequired[list[FoodItem]]
+    missing_details: NotRequired[list[MissingDetail]]
+    unclear_items: NotRequired[list[str]]
     voice_update: NotRequired[VoiceUpdate]
 
 
@@ -57,7 +66,13 @@ class VoiceUpdateContext:
 
 async def classify_transcript(state: VoiceUpdateState) -> dict:
     is_eating = await eating_classifier.is_eating_update(state["transcript"])
-    return {"is_eating_update": is_eating, "eating_status": None, "food_items": []}
+    return {
+        "is_eating_update": is_eating,
+        "eating_status": None,
+        "food_items": [],
+        "missing_details": [],
+        "unclear_items": [],
+    }
 
 
 def route_after_classify(state: VoiceUpdateState) -> str:
@@ -66,9 +81,14 @@ def route_after_classify(state: VoiceUpdateState) -> str:
 
 async def extract_food_items(state: VoiceUpdateState) -> dict:
     extracted = await food_extractor.extract_food_items(state["transcript"])
-    if not extracted:
-        # No specific food named: not an eating update, ask the user for detail.
-        return {"is_eating_update": False, "eating_status": "needs_detail", "food_items": []}
+    missing = _missing_details(extracted)
+    if missing:
+        # All or nothing: one unclear item means no item is kept.
+        return {
+            "eating_status": "needs_detail",
+            "missing_details": missing,
+            "unclear_items": [item.name for item in extracted if _is_unclear(item)],
+        }
 
     recorded_at = state["client_timestamp"]
     items = []
@@ -90,6 +110,27 @@ async def extract_food_items(state: VoiceUpdateState) -> dict:
     for item in items:
         print(f"[food item] user={state['user_id']} {item}")
     return {"eating_status": "logged", "food_items": items}
+
+
+def _is_unclear(item: ExtractedFoodItem) -> bool:
+    return not (item.food_recognized and item.time_understood and item.quantity_understood)
+
+
+def _missing_details(extracted: list[ExtractedFoodItem]) -> list[MissingDetail]:
+    """Which of what / when / how much Claude could not understand for any item."""
+    missing: list[MissingDetail] = []
+    if not extracted or not all(item.food_recognized for item in extracted):
+        missing.append("what")
+    if not all(item.time_understood for item in extracted):
+        missing.append("when")
+    if not all(item.quantity_understood for item in extracted):
+        missing.append("how_much")
+    return missing
+
+
+def route_after_extract(state: VoiceUpdateState) -> str:
+    # needs_detail saves nothing for now; the client asks the user and sends a new update.
+    return END if state.get("eating_status") == "needs_detail" else "save_voice_update"
 
 
 async def save_voice_update(state: VoiceUpdateState, runtime: Runtime[VoiceUpdateContext]) -> dict:
@@ -116,7 +157,9 @@ def build_voice_update_graph():
     graph.add_conditional_edges(
         "classify_transcript", route_after_classify, ["extract_food_items", "save_voice_update"]
     )
-    graph.add_edge("extract_food_items", "save_voice_update")
+    graph.add_conditional_edges(
+        "extract_food_items", route_after_extract, ["save_voice_update", END]
+    )
     graph.add_edge("save_voice_update", END)
     return graph.compile()
 
