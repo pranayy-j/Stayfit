@@ -38,6 +38,9 @@ def test_returns_parsed_items(monkeypatch: pytest.MonkeyPatch) -> None:
                     "metric_unit": "g",
                     "quantity_is_default": False,
                     "time": {"kind": "meal", "meal": "lunch", "days_ago": 0},
+                    "food_recognized": True,
+                    "quantity_understood": True,
+                    "time_understood": True,
                 }
             ]
         }

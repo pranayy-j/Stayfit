@@ -2,6 +2,7 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.controllers.deps import get_current_user
@@ -10,12 +11,13 @@ from app.models import User
 from app.schemas.common import UNAUTHORIZED, ErrorResponse
 from app.schemas.voice_update import (
     MAX_TRANSCRIPT_CHARS,
+    NeedsDetailResponse,
     VoiceUpdateRequest,
     VoiceUpdateResponse,
 )
 from app.services.eating_classifier import ClassificationError
 from app.services.food_extractor import ExtractionError
-from app.services.voice_update_service import VoiceUpdateService
+from app.services.voice_update_service import NeedsDetailError, VoiceUpdateService
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +32,17 @@ def get_voice_update_service(
 
 @router.post(
     "/voice-update",
+    response_model=VoiceUpdateResponse,
     responses={
         **UNAUTHORIZED,
         413: {"model": ErrorResponse, "description": "Transcript too long"},
+        422: {
+            "model": NeedsDetailResponse,
+            "description": (
+                "Eating update needs more detail (what / when / how much); nothing is stored. "
+                "Request validation errors also use 422, with a list as `detail`."
+            ),
+        },
         502: {"model": ErrorResponse, "description": "JEV or Claude call failed"},
     },
 )
@@ -40,7 +50,7 @@ async def voice_update(
     body: VoiceUpdateRequest,
     user: Annotated[User, Depends(get_current_user)],
     service: Annotated[VoiceUpdateService, Depends(get_voice_update_service)],
-) -> VoiceUpdateResponse:
+) -> VoiceUpdateResponse | JSONResponse:
     if len(body.voice_transcript) > MAX_TRANSCRIPT_CHARS:
         raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, "Transcript too long")
     try:
@@ -51,6 +61,12 @@ async def voice_update(
     except ExtractionError as e:
         logger.exception("Claude food extraction failed for user %s", user.id)
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Food extraction failed") from e
+    except NeedsDetailError as e:
+        logger.info("Voice update needs detail for user %s: %s", user.id, e.missing)
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            content=NeedsDetailResponse(missing=e.missing, items=e.items).model_dump(),
+        )
 
     vu = result.voice_update
     return VoiceUpdateResponse(
