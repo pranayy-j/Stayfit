@@ -20,7 +20,16 @@ class Settings(BaseSettings):
     google_client_ids: list[str] = []
 
     jwt_secret: str = "dev-only-insecure-secret"
-    jwt_expire_days: int = 30
+    # Short-lived; the app gets a new one with its refresh token.
+    access_token_expire_minutes: int = 15
+    # Users stay signed in until they're inactive this long; every refresh restarts the clock.
+    refresh_token_inactivity_days: int = 30
+
+    # Web origins allowed to call the API with cookies (CORS). Native apps aren't affected.
+    cors_origins: list[str] = ["http://localhost:8081"]
+    # Send auth cookies over HTTPS only. Chrome and Firefox allow this on http://localhost too;
+    # set false only for local dev in a browser that doesn't (e.g. Safari).
+    cookie_secure: bool = True
 
     # TypeSafe AI key for JEV (transcript classification).
     typesafe_api_key: str | None = None
@@ -35,6 +44,15 @@ class Settings(BaseSettings):
         if url and url.startswith(("postgresql://", "postgres://")):
             return "postgresql+psycopg://" + url.split("://", 1)[1]
         return url
+
+    @field_validator("cors_origins")
+    @classmethod
+    def _no_wildcard_origin(cls, origins: list[str]) -> list[str]:
+        # With credentials allowed, a "*" makes Starlette echo back any origin, which would let
+        # every website make signed-in requests with the user's cookies.
+        if "*" in origins:
+            raise ValueError("CORS_ORIGINS must list the web app's origins, not '*'")
+        return origins
 
     @property
     def migrations_database_url(self) -> str:

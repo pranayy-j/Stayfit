@@ -8,6 +8,9 @@ TEST_DATABASE_URL = os.environ.get(
 )
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ["DATABASE_URL_UNPOOLED"] = TEST_DATABASE_URL
+# Auth settings the tests rely on, independent of any local .env.
+os.environ["CORS_ORIGINS"] = '["http://localhost:8081"]'
+os.environ["COOKIE_SECURE"] = "true"
 
 import pytest  # noqa: E402
 from alembic.config import Config  # noqa: E402
@@ -42,4 +45,4 @@ def _migrated_db() -> None:
 def _clean_tables() -> None:
     yield
     with engine.begin() as conn:
-        conn.execute(text("TRUNCATE users, voice_updates"))
+        conn.execute(text("TRUNCATE users, voice_updates, auth_sessions"))

@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.config import settings
 from app.controllers import auth, health, voice_update
 from app.db import async_engine
 from app.services import eating_classifier, food_extractor
@@ -21,7 +22,9 @@ app = FastAPI(title="StayFit API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    # Explicit origins, not "*": browsers only send the auth cookies to allowed origins.
+    allow_origins=settings.cors_origins,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
