@@ -13,12 +13,13 @@ from pydantic import BaseModel, Field
 
 
 class Meal(StrEnum):
+    early_morning_snack = "early_morning_snack"
     breakfast = "breakfast"
     brunch = "brunch"
     lunch = "lunch"
     evening_snack = "evening_snack"
     dinner = "dinner"
-    late_night = "late_night"
+    late_night_snack = "late_night_snack"
 
 
 @dataclass(frozen=True)
@@ -34,12 +35,13 @@ class MealWindow:
 
 
 MEAL_WINDOWS: dict[Meal, MealWindow] = {
-    Meal.breakfast: MealWindow(time(5, 0), time(10, 30), time(8, 30)),
+    Meal.early_morning_snack: MealWindow(time(4, 0), time(7, 0), time(6, 0)),
+    Meal.breakfast: MealWindow(time(7, 0), time(10, 30), time(8, 30)),
     Meal.brunch: MealWindow(time(10, 30), time(12, 0), time(11, 15)),
     Meal.lunch: MealWindow(time(12, 0), time(15, 0), time(13, 30)),
-    Meal.evening_snack: MealWindow(time(15, 0), time(19, 30), time(17, 30)),
-    Meal.dinner: MealWindow(time(19, 30), time(23, 0), time(21, 0)),
-    Meal.late_night: MealWindow(time(23, 0), time(5, 0), time(23, 30)),
+    Meal.evening_snack: MealWindow(time(15, 0), time(18, 30), time(17, 0)),
+    Meal.dinner: MealWindow(time(18, 30), time(22, 0), time(20, 30)),
+    Meal.late_night_snack: MealWindow(time(22, 0), time(4, 0), time(23, 0)),
 }
 
 

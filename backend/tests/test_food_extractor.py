@@ -32,6 +32,7 @@ def test_returns_parsed_items(monkeypatch: pytest.MonkeyPatch) -> None:
             "items": [
                 {
                     "name": "kheer",
+                    "canonical_name": "kheer",
                     "everyday_quantity": 1,
                     "everyday_unit": "katori",
                     "metric_quantity": 150,

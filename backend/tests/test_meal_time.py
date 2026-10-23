@@ -24,12 +24,14 @@ def resolve(recorded: str, **ref: object) -> datetime:
         # Recorded inside the meal's window → recording time.
         ("2026-10-20 13:10", {"meal": Meal.lunch}, "2026-10-20 13:10"),
         # Window hasn't started yet today → previous day's meal.
-        ("2026-10-20 00:40", {"meal": Meal.dinner}, "2026-10-19 21:00"),
+        ("2026-10-20 00:40", {"meal": Meal.dinner}, "2026-10-19 20:30"),
         ("2026-10-20 09:00", {"meal": Meal.lunch}, "2026-10-19 13:30"),
         # Late night crosses midnight: 02:00 is inside its window.
-        ("2026-10-20 02:00", {"meal": Meal.late_night}, "2026-10-20 02:00"),
+        ("2026-10-20 02:00", {"meal": Meal.late_night_snack}, "2026-10-20 02:00"),
+        # Early morning snack said later in the day → today 06:00.
+        ("2026-10-20 09:00", {"meal": Meal.early_morning_snack}, "2026-10-20 06:00"),
         # Day words shift the date.
-        ("2026-10-20 10:00", {"meal": Meal.dinner, "days_ago": 1}, "2026-10-19 21:00"),
+        ("2026-10-20 10:00", {"meal": Meal.dinner, "days_ago": 1}, "2026-10-19 20:30"),
         ("2026-10-20 10:00", {"meal": Meal.breakfast, "days_ago": 2}, "2026-10-18 08:30"),
     ],
 )
@@ -83,13 +85,16 @@ def test_keeps_recording_offset() -> None:
 @pytest.mark.parametrize(
     ("t", "meal"),
     [
-        (time(5, 0), Meal.breakfast),
+        (time(4, 0), Meal.early_morning_snack),
+        (time(6, 59), Meal.early_morning_snack),
+        (time(7, 0), Meal.breakfast),
         (time(10, 30), Meal.brunch),
         (time(14, 59), Meal.lunch),
-        (time(19, 29), Meal.evening_snack),
-        (time(22, 0), Meal.dinner),
-        (time(23, 0), Meal.late_night),
-        (time(4, 59), Meal.late_night),
+        (time(18, 29), Meal.evening_snack),
+        (time(18, 30), Meal.dinner),
+        (time(21, 59), Meal.dinner),
+        (time(22, 0), Meal.late_night_snack),
+        (time(3, 59), Meal.late_night_snack),
     ],
 )
 def test_meal_at(t: time, meal: Meal) -> None:

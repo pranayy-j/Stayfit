@@ -8,14 +8,15 @@ from sqlalchemy import func, select
 
 from app.db import SessionLocal
 from app.main import app
-from app.models import User, VoiceUpdate
+from app.models import CalorieChartItem, EatingTrackerEntry, User, VoiceUpdate
 from app.schemas.voice_update import MAX_TRANSCRIPT_CHARS
-from app.services import eating_classifier, food_extractor
+from app.services import eating_classifier, food_extractor, nutrition_estimator
 from app.services.eating_classifier import ClassificationError
 from app.services.food_extractor import ExtractedFoodItem, ExtractionError
 from app.services.meal_time import Meal, TimeReference
+from app.services.nutrition_estimator import FoodNutrition, NutritionEstimationError
 from app.services.token_service import create_access_token
-from app.workflows.voice_update_graph import extract_food_items
+from app.workflows.voice_update_graph import extract_food_items, voice_update_graph
 
 client = TestClient(app)
 
@@ -37,6 +38,7 @@ def jev_probability(monkeypatch: pytest.MonkeyPatch) -> dict[str, float]:
 def dal(name: str = "dal", **flags: bool) -> ExtractedFoodItem:
     return ExtractedFoodItem(
         name=name,
+        canonical_name=name,
         everyday_quantity=1,
         everyday_unit="katori",
         metric_quantity=150,
@@ -59,6 +61,33 @@ def claude_items(monkeypatch: pytest.MonkeyPatch) -> list[ExtractedFoodItem]:
     return items
 
 
+def nutrition(name: str, kcal: float = 100.0) -> FoodNutrition:
+    return FoodNutrition(
+        food_item=name,
+        metric_unit="g",
+        everyday_unit_name="katori",
+        grams_per_everyday_unit=150,
+        calories_per_100=kcal,
+        protein_g_per_100=5,
+        carbs_g_per_100=10,
+        fats_g_per_100=2,
+        fibre_g_per_100=1,
+    )
+
+
+@pytest.fixture(autouse=True)
+def estimator_calls(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, str]]:
+    """Stub the nutrition estimate; returns the {name: unit hint} maps it was asked for."""
+    calls: list[dict[str, str]] = []
+
+    async def fake(foods: dict[str, str]) -> dict[str, FoodNutrition]:
+        calls.append(dict(foods))
+        return {name: nutrition(name) for name in foods}
+
+    monkeypatch.setattr(nutrition_estimator, "estimate_nutrition", fake)
+    return calls
+
+
 def auth_header() -> dict[str, str]:
     with SessionLocal() as db:
         user = User(id=uuid.uuid4(), name="Jane", email="jane@example.com", timezone="Asia/Kolkata")
@@ -74,7 +103,7 @@ def test_voice_update_above_threshold_is_eating_update(jev_probability: dict) ->
     assert body["status"] == "received"
     assert body["is_eating_update"] is True
     assert body["id"] and body["created_at"]
-    assert body["eating_status"] == "logged"
+    assert body["eating_status"] == "accepted"
     assert "missing_details" not in body
     assert "food_items" not in body
 
@@ -108,12 +137,12 @@ def test_voice_update_unclear_item_is_422_and_stores_nothing(
     assert stored_count() == 0
 
 
-def test_voice_update_defaults_are_logged(jev_probability: dict, claude_items: list) -> None:
+def test_voice_update_defaults_are_accepted(jev_probability: dict, claude_items: list) -> None:
     # "chawal aur daal lunch me": no quantity said, a default serving is fine.
     claude_items[:] = [dal("rice"), dal()]
     res = client.post("/v1/voice-update", json=PAYLOAD, headers=auth_header())
     assert res.status_code == 200
-    assert res.json()["eating_status"] == "logged"
+    assert res.json()["eating_status"] == "accepted"
     assert stored_count() == 1
 
 
@@ -135,7 +164,7 @@ def test_extract_node_resolves_meal_time(claude_items: list) -> None:
         "client_timestamp": recorded_at,
     }
     update = asyncio.run(extract_food_items(state))
-    assert update["eating_status"] == "logged"
+    assert update["eating_status"] == "accepted"
     [item] = update["food_items"]
     assert item.name == "dal"
     assert item.consumed_at == datetime.fromisoformat("2026-10-20T13:30:00+05:30")
@@ -234,3 +263,169 @@ def test_voice_update_too_long_transcript(jev_probability: dict) -> None:
     res = client.post("/v1/voice-update", json=over, headers=headers)
     assert res.status_code == 413
     assert res.json() == {"detail": "Transcript too long"}
+
+
+# --- Background food logging -------------------------------------------------------------
+
+EVENING = {"voice-transcript": "aaj lunch me dal khayi", "timestamp": "2026-10-20T20:00:00+05:30"}
+
+
+def post_eating(payload: dict = EVENING) -> dict:
+    # TestClient runs background tasks before returning, so logging has finished here.
+    res = client.post("/v1/voice-update", json=payload, headers=auth_header())
+    assert res.status_code == 200
+    return res.json()
+
+
+def tracker_rows() -> list[EatingTrackerEntry]:
+    with SessionLocal() as db:
+        return list(db.scalars(select(EatingTrackerEntry).order_by(EatingTrackerEntry.created_at)))
+
+
+def chart_rows() -> dict[str, CalorieChartItem]:
+    with SessionLocal() as db:
+        return {f.food_item: f for f in db.scalars(select(CalorieChartItem))}
+
+
+def logging_status(voice_update_id: str) -> str | None:
+    with SessionLocal() as db:
+        return db.get(VoiceUpdate, uuid.UUID(voice_update_id)).food_logging_status
+
+
+def is_forgotten(voice_update_id: str) -> bool:
+    config = {"configurable": {"thread_id": voice_update_id}}
+    return asyncio.run(voice_update_graph.aget_state(config)).values == {}
+
+
+def test_new_food_is_estimated_and_logged(jev_probability: dict, estimator_calls: list) -> None:
+    body = post_eating()
+
+    assert estimator_calls == [{"dal": "katori"}]
+    dal_chart = chart_rows()["dal"]
+    assert dal_chart.metric_unit_name == "g"
+    assert dal_chart.grams_per_everyday_unit == 150
+    [row] = tracker_rows()
+    with SessionLocal() as db:
+        user = db.scalar(select(User))
+    assert row.user_id == user.id
+    assert row.voice_update_id == uuid.UUID(body["id"])
+    assert row.food_item_id == dal_chart.id
+    assert row.food_name_as_said == "dal"
+    assert (row.everyday_quantity, row.everyday_unit) == (1, "katori")
+    assert (row.metric_quantity, row.metric_unit) == (150, "g")
+    assert row.quantity_is_default is True
+    # "aaj lunch" said at 20:00 IST → 13:30 local, stored as is, with the +05:30 offset.
+    assert row.date_eaten.isoformat() == "2026-10-20"
+    assert row.time_eaten.isoformat() == "13:30:00"
+    assert row.utc_offset_minutes == 330
+    assert row.meal_type == "lunch"
+    # 150 g at 100 kcal / 5 g protein / 10 g carbs / 2 g fat / 1 g fibre per 100 g.
+    assert (row.calories, row.protein_g, row.carbs_g, row.fats_g, row.fibre_g) == (
+        150,
+        7.5,
+        15,
+        3,
+        1.5,
+    )
+    assert logging_status(body["id"]) == "done"
+    assert is_forgotten(body["id"])
+
+
+def test_known_food_skips_the_estimate(jev_probability: dict, estimator_calls: list) -> None:
+    with SessionLocal() as db:
+        db.add(
+            CalorieChartItem(
+                **nutrition("dal", kcal=120).model_dump(exclude={"metric_unit"}),
+                metric_unit_name="g",
+            )
+        )
+        db.commit()
+    body = post_eating()
+
+    assert estimator_calls == []
+    [row] = tracker_rows()
+    assert row.calories == 180
+    assert logging_status(body["id"]) == "done"
+
+
+def test_only_unknown_foods_are_estimated(
+    jev_probability: dict, claude_items: list, estimator_calls: list
+) -> None:
+    with SessionLocal() as db:
+        db.add(
+            CalorieChartItem(
+                **nutrition("dal").model_dump(exclude={"metric_unit"}), metric_unit_name="g"
+            )
+        )
+        db.commit()
+    claude_items[:] = [dal(), dal("roti")]
+    post_eating()
+
+    assert estimator_calls == [{"roti": "katori"}]
+    assert {r.food_name_as_said for r in tracker_rows()} == {"dal", "roti"}
+
+
+def test_canonical_name_is_the_chart_key(
+    jev_probability: dict, claude_items: list, estimator_calls: list
+) -> None:
+    # "do rotia, phir ek aur roti": two items, one food.
+    claude_items[:] = [
+        dal("rotia").model_copy(update={"canonical_name": " Roti "}),
+        dal("roti"),
+    ]
+    post_eating()
+
+    assert estimator_calls == [{"roti": "katori"}]
+    assert list(chart_rows()) == ["roti"]
+    assert [r.food_name_as_said for r in tracker_rows()] == ["rotia", "roti"]
+
+
+def test_litres_are_stored_as_ml(jev_probability: dict, claude_items: list) -> None:
+    claude_items[:] = [
+        dal("lassi").model_copy(
+            update={"everyday_unit": "glass", "metric_quantity": 0.25, "metric_unit": "l"}
+        )
+    ]
+    post_eating()
+
+    [row] = tracker_rows()
+    assert (row.metric_quantity, row.metric_unit) == (250, "ml")
+
+
+def test_meal_comes_from_the_time_when_none_is_said(
+    jev_probability: dict, claude_items: list
+) -> None:
+    # "abhi chai pi" at 06:15 → early morning snack.
+    claude_items[:] = [dal("chai").model_copy(update={"time": TimeReference(kind="now")})]
+    post_eating({**EVENING, "timestamp": "2026-10-20T06:15:00+05:30"})
+
+    [row] = tracker_rows()
+    assert row.meal_type == "early_morning_snack"
+    assert row.time_eaten.isoformat() == "06:15:00"
+
+
+def test_estimate_failure_marks_failed_and_stores_no_food(
+    jev_probability: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fail(_: dict) -> dict:
+        raise NutritionEstimationError("boom")
+
+    monkeypatch.setattr(nutrition_estimator, "estimate_nutrition", fail)
+    body = post_eating()
+
+    # The user already got their 200; the voice update stays, marked failed.
+    assert body["eating_status"] == "accepted"
+    assert logging_status(body["id"]) == "failed"
+    assert tracker_rows() == []
+    assert chart_rows() == {}
+    assert is_forgotten(body["id"])
+
+
+def test_not_eating_has_no_food_logging(jev_probability: dict, estimator_calls: list) -> None:
+    jev_probability["p"] = 0.1
+    body = client.post("/v1/voice-update", json=PAYLOAD, headers=auth_header()).json()
+
+    assert logging_status(body["id"]) is None
+    assert estimator_calls == []
+    assert tracker_rows() == []
+    assert is_forgotten(body["id"])
