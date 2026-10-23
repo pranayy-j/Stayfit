@@ -1,3 +1,6 @@
+import uuid
+
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import VoiceUpdate
@@ -12,3 +15,10 @@ class VoiceUpdateRepository:
         self.db.add(voice_update)
         await self.db.flush()
         return voice_update
+
+    async def set_food_logging_status(self, voice_update_id: uuid.UUID, status: str) -> None:
+        await self.db.execute(
+            update(VoiceUpdate)
+            .where(VoiceUpdate.id == voice_update_id)
+            .values(food_logging_status=status)
+        )

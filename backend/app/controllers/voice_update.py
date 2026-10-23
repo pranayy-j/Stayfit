@@ -1,7 +1,7 @@
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,7 +17,11 @@ from app.schemas.voice_update import (
 )
 from app.services.eating_classifier import ClassificationError
 from app.services.food_extractor import ExtractionError
-from app.services.voice_update_service import NeedsDetailError, VoiceUpdateService
+from app.services.voice_update_service import (
+    NeedsDetailError,
+    VoiceUpdateService,
+    log_food_items_in_background,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +54,7 @@ async def voice_update(
     body: VoiceUpdateRequest,
     user: Annotated[User, Depends(get_current_user)],
     service: Annotated[VoiceUpdateService, Depends(get_voice_update_service)],
+    background_tasks: BackgroundTasks,
 ) -> VoiceUpdateResponse | JSONResponse:
     if len(body.voice_transcript) > MAX_TRANSCRIPT_CHARS:
         raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, "Transcript too long")
@@ -68,10 +73,12 @@ async def voice_update(
             content=NeedsDetailResponse(missing=e.missing, items=e.items).model_dump(),
         )
 
-    vu = result.voice_update
+    if result.eating_status == "accepted":
+        # Runs after the response is sent.
+        background_tasks.add_task(log_food_items_in_background, result.id)
     return VoiceUpdateResponse(
-        id=vu.id,
-        created_at=vu.created_at,
-        is_eating_update=vu.is_eating_update,
+        id=result.id,
+        created_at=result.created_at,
+        is_eating_update=result.is_eating_update,
         eating_status=result.eating_status,
     )

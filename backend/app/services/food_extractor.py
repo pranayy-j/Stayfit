@@ -24,6 +24,9 @@ class ExtractedFoodItem(BaseModel):
     """One food or drink the speaker consumed (or will consume)."""
 
     name: str = Field(description="Food or drink name, keeping any named variety.")
+    canonical_name: str = Field(
+        description="The same name in lowercase and singular, with no other change."
+    )
     everyday_quantity: float = Field(description="Amount in an everyday unit, e.g. 2 for 2 roti.")
     everyday_unit: str = Field(
         description="Everyday unit: piece, katori, bowl, plate, glass, cup, spoon, scoop, slice..."
@@ -71,6 +74,9 @@ was consumed.
 Items
 - Each food or drink is its own item. "kheer ke sath do rotia aur dal" gives kheer, roti and dal.
 - A named variety is kept. "dal makhani" stays dal makhani, and plain "dal" stays dal.
+- canonical_name is the name in lowercase and singular: "Rotia" -> roti, "Boiled Eggs" -> \
+boiled egg. Change nothing else: do not translate, correct or swap in a synonym ("chapati" \
+stays chapati).
 - If the speaker corrects themselves, the last version wins. "2 roti... nahi, 3 roti" gives 3.
 - If no specific food is named (only a vague category like "kuch khaya", "snacks khaye"), \
 return no items.
@@ -92,10 +98,11 @@ Time
 Do not compute dates or times. Report only what was said, per item, in the time fields:
 - A clock time was said ("1 baje", "at 9"): kind=clock with the hour and minute as said.
 - A relative time was said ("aadha ghanta pehele", "2 hours ago"): kind=relative with minutes.
-- Only a meal word was said: kind=meal. Meal words: breakfast, subah, subah ka nashta -> \
-breakfast; brunch -> brunch; lunch, din, din ka khana, dopahar -> lunch; hi-tea, snacks, shaam, \
-shaam ki chai -> evening_snack; dinner, raat, raat ka khana -> dinner; late night, midnight \
-snack -> late_night. Also set meal when a meal word comes with a clock time.
+- Only a meal word was said: kind=meal. Meal words: early morning, bed tea, subah subah -> \
+early_morning_snack; breakfast, subah, subah ka nashta -> breakfast; brunch -> brunch; lunch, \
+din, din ka khana, dopahar -> lunch; hi-tea, snacks, shaam, shaam ki chai -> evening_snack; \
+dinner, raat, raat ka khana -> dinner; late night, midnight snack -> late_night_snack. Also set \
+meal when a meal word comes with a clock time.
 - "now", "abhi", "about to", or nothing said: kind=now.
 - Day words: aaj is days_ago=0, kal with past tense is 1, parso is 2; otherwise null.
 - A time said once applies to every item it covers.
