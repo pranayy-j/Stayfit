@@ -8,11 +8,20 @@ from sqlalchemy import func, select
 
 from app.db import SessionLocal
 from app.main import app
-from app.models import CalorieChartItem, EatingTrackerEntry, User, VoiceUpdate
+from app.models import CalorieChartItem, EatingTrackerEntry, FoodAlias, User, VoiceUpdate
+from app.models.calorie_chart_item import EMBEDDING_DIMENSIONS
 from app.schemas.voice_update import MAX_TRANSCRIPT_CHARS
-from app.services import eating_classifier, food_extractor, nutrition_estimator
+from app.services import (
+    eating_classifier,
+    food_embedder,
+    food_extractor,
+    food_matcher,
+    nutrition_estimator,
+)
 from app.services.eating_classifier import ClassificationError
+from app.services.food_embedder import EmbeddingError
 from app.services.food_extractor import ExtractedFoodItem, ExtractionError
+from app.services.food_matcher import FoodMatchingError
 from app.services.meal_time import Meal, TimeReference
 from app.services.nutrition_estimator import FoodNutrition, NutritionEstimationError
 from app.services.token_service import create_access_token
@@ -61,9 +70,10 @@ def claude_items(monkeypatch: pytest.MonkeyPatch) -> list[ExtractedFoodItem]:
     return items
 
 
-def nutrition(name: str, kcal: float = 100.0) -> FoodNutrition:
+def nutrition(name: str, kcal: float = 100.0, aliases: tuple[str, ...] = ()) -> FoodNutrition:
     return FoodNutrition(
         food_item=name,
+        aliases=list(aliases),
         metric_unit="g",
         everyday_unit_name="katori",
         grams_per_everyday_unit=150,
@@ -86,6 +96,61 @@ def estimator_calls(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, str]]:
 
     monkeypatch.setattr(nutrition_estimator, "estimate_nutrition", fake)
     return calls
+
+
+# Fake embeddings: names in the same group get the same vector, other names unrelated ones.
+SAME_FOOD = {"kela": "banana", "kele": "banana"}
+_axes: dict[str, int] = {}
+
+
+def fake_vector(text: str) -> list[float]:
+    name = text.split(" | ", 1)[0]
+    axis = _axes.setdefault(SAME_FOOD.get(name, name), len(_axes))
+    return [1.0 if i == axis else 0.0 for i in range(EMBEDDING_DIMENSIONS)]
+
+
+@pytest.fixture(autouse=True)
+def embedder_calls(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, list[str]]]:
+    """Stub Voyage; returns the (input type, texts) of each call."""
+    calls: list[tuple[str, list[str]]] = []
+
+    def fake(input_type: str):
+        async def embed(texts: list[str]) -> list[list[float]]:
+            calls.append((input_type, list(texts)))
+            return [fake_vector(t) for t in texts]
+
+        return embed
+
+    monkeypatch.setattr(food_embedder, "embed_queries", fake("query"))
+    monkeypatch.setattr(food_embedder, "embed_documents", fake("document"))
+    return calls
+
+
+@pytest.fixture(autouse=True)
+def matcher(monkeypatch: pytest.MonkeyPatch) -> dict:
+    """Stub the Claude match; set holder["matches"] to control it, read holder["calls"]."""
+    holder: dict = {"matches": {}, "calls": []}
+
+    async def fake(candidates: dict[str, dict[str, str]]) -> dict[str, str]:
+        holder["calls"].append({name: dict(texts) for name, texts in candidates.items()})
+        return holder["matches"]
+
+    monkeypatch.setattr(food_matcher, "match_foods", fake)
+    return holder
+
+
+def add_chart_food(name: str, search_text: str | None = None, embedded: bool = True) -> uuid.UUID:
+    search_text = search_text or name
+    with SessionLocal() as db:
+        food = CalorieChartItem(
+            **nutrition(name).model_dump(exclude={"metric_unit", "aliases"}),
+            metric_unit_name="g",
+            search_text=search_text if embedded else None,
+            embedding=fake_vector(search_text) if embedded else None,
+        )
+        db.add(food)
+        db.commit()
+        return food.id
 
 
 def auth_header() -> dict[str, str]:
@@ -270,9 +335,9 @@ def test_voice_update_too_long_transcript(jev_probability: dict) -> None:
 EVENING = {"voice-transcript": "aaj lunch me dal khayi", "timestamp": "2026-10-20T20:00:00+05:30"}
 
 
-def post_eating(payload: dict = EVENING) -> dict:
+def post_eating(payload: dict = EVENING, headers: dict[str, str] | None = None) -> dict:
     # TestClient runs background tasks before returning, so logging has finished here.
-    res = client.post("/v1/voice-update", json=payload, headers=auth_header())
+    res = client.post("/v1/voice-update", json=payload, headers=headers or auth_header())
     assert res.status_code == 200
     return res.json()
 
@@ -297,13 +362,20 @@ def is_forgotten(voice_update_id: str) -> bool:
     return asyncio.run(voice_update_graph.aget_state(config)).values == {}
 
 
-def test_new_food_is_estimated_and_logged(jev_probability: dict, estimator_calls: list) -> None:
+def test_new_food_is_estimated_and_logged(
+    jev_probability: dict, estimator_calls: list, embedder_calls: list, matcher: dict
+) -> None:
     body = post_eating()
 
+    # An empty chart has nothing similar, so Claude isn't asked to match.
+    assert matcher["calls"] == []
     assert estimator_calls == [{"dal": "katori"}]
+    assert embedder_calls == [("query", ["dal"]), ("document", ["dal"])]
     dal_chart = chart_rows()["dal"]
     assert dal_chart.metric_unit_name == "g"
     assert dal_chart.grams_per_everyday_unit == 150
+    assert dal_chart.search_text == "dal"
+    assert list(dal_chart.embedding) == fake_vector("dal")
     [row] = tracker_rows()
     with SessionLocal() as db:
         user = db.scalar(select(User))
@@ -335,7 +407,7 @@ def test_known_food_skips_the_estimate(jev_probability: dict, estimator_calls: l
     with SessionLocal() as db:
         db.add(
             CalorieChartItem(
-                **nutrition("dal", kcal=120).model_dump(exclude={"metric_unit"}),
+                **nutrition("dal", kcal=120).model_dump(exclude={"metric_unit", "aliases"}),
                 metric_unit_name="g",
             )
         )
@@ -354,7 +426,8 @@ def test_only_unknown_foods_are_estimated(
     with SessionLocal() as db:
         db.add(
             CalorieChartItem(
-                **nutrition("dal").model_dump(exclude={"metric_unit"}), metric_unit_name="g"
+                **nutrition("dal").model_dump(exclude={"metric_unit", "aliases"}),
+                metric_unit_name="g",
             )
         )
         db.commit()
@@ -429,3 +502,148 @@ def test_not_eating_has_no_food_logging(jev_probability: dict, estimator_calls: 
     assert estimator_calls == []
     assert tracker_rows() == []
     assert is_forgotten(body["id"])
+
+
+# --- Finding a food already in the chart under another name -----------------------------
+
+
+def aliases() -> dict[str, uuid.UUID]:
+    with SessionLocal() as db:
+        return {a.alias: a.food_item_id for a in db.scalars(select(FoodAlias))}
+
+
+def test_same_food_under_another_name_reuses_the_chart_food(
+    jev_probability: dict,
+    claude_items: list,
+    estimator_calls: list,
+    embedder_calls: list,
+    matcher: dict,
+) -> None:
+    banana_id = add_chart_food("banana", "banana | kela")
+    claude_items[:] = [dal("kela")]
+    matcher["matches"] = {"kela": "banana"}
+    body = post_eating()
+
+    assert embedder_calls == [("query", ["kela"])]
+    assert matcher["calls"] == [{"kela": {"banana": "banana | kela"}}]
+    assert estimator_calls == []
+    assert list(chart_rows()) == ["banana"]
+    [row] = tracker_rows()
+    assert row.food_item_id == banana_id
+    assert row.food_name_as_said == "kela"
+    assert aliases() == {"kela": banana_id}
+    assert logging_status(body["id"]) == "done"
+
+
+def test_saved_alias_is_found_without_embedding_or_claude(
+    jev_probability: dict,
+    claude_items: list,
+    estimator_calls: list,
+    embedder_calls: list,
+    matcher: dict,
+) -> None:
+    banana_id = add_chart_food("banana")
+    claude_items[:] = [dal("kela")]
+    matcher["matches"] = {"kela": "banana"}
+    headers = auth_header()
+    post_eating(headers=headers)
+    embedder_calls.clear()
+    matcher["calls"].clear()
+
+    post_eating(headers=headers)
+
+    assert embedder_calls == []
+    assert matcher["calls"] == []
+    assert estimator_calls == []
+    assert [r.food_item_id for r in tracker_rows()] == [banana_id, banana_id]
+
+
+def test_similar_but_different_food_is_estimated(
+    jev_probability: dict,
+    claude_items: list,
+    estimator_calls: list,
+    embedder_calls: list,
+    matcher: dict,
+) -> None:
+    # Claude says none of the candidates is the same food: a new chart food is added.
+    add_chart_food("dal")
+    claude_items[:] = [dal("dal makhani")]
+    post_eating()
+
+    assert matcher["calls"] == [{"dal makhani": {"dal": "dal"}}]
+    assert estimator_calls == [{"dal makhani": "katori"}]
+    assert embedder_calls[-1] == ("document", ["dal makhani"])
+    assert set(chart_rows()) == {"dal", "dal makhani"}
+    assert aliases() == {}
+
+
+def test_only_unmatched_foods_are_estimated(
+    jev_probability: dict, claude_items: list, estimator_calls: list, matcher: dict
+) -> None:
+    banana_id = add_chart_food("banana")
+    claude_items[:] = [dal("kela"), dal("roti")]
+    matcher["matches"] = {"kela": "banana"}
+    post_eating()
+
+    assert estimator_calls == [{"roti": "katori"}]
+    foods = {r.food_name_as_said: r.food_item_id for r in tracker_rows()}
+    assert foods["kela"] == banana_id
+    assert foods["roti"] == chart_rows()["roti"].id
+
+
+def test_new_food_is_embedded_with_its_other_names(
+    jev_probability: dict, claude_items: list, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def estimate(foods: dict[str, str]) -> dict[str, FoodNutrition]:
+        return {"kela": nutrition("kela", aliases=("Banana", "kele", "kela"))}
+
+    monkeypatch.setattr(nutrition_estimator, "estimate_nutrition", estimate)
+    claude_items[:] = [dal("kela")]
+    post_eating()
+
+    assert chart_rows()["kela"].search_text == "kela | banana, kele"
+
+
+def test_foods_without_an_embedding_are_not_candidates(
+    jev_probability: dict, claude_items: list, matcher: dict
+) -> None:
+    # Added before semantic search and not yet backfilled.
+    add_chart_food("banana", embedded=False)
+    claude_items[:] = [dal("kela")]
+    post_eating()
+
+    assert matcher["calls"] == []
+
+
+def test_nearest_foods_come_first(
+    jev_probability: dict, claude_items: list, matcher: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("app.workflows.voice_update_graph.SIMILAR_FOODS_LIMIT", 1)
+    add_chart_food("roti")
+    add_chart_food("banana")
+    add_chart_food("dal")
+    claude_items[:] = [dal("kela")]
+    post_eating()
+
+    assert matcher["calls"] == [{"kela": {"banana": "banana"}}]
+
+
+@pytest.mark.parametrize("failing", ["embed", "match"])
+def test_search_failure_marks_failed_and_stores_no_food(
+    jev_probability: dict, claude_items: list, monkeypatch: pytest.MonkeyPatch, failing: str
+) -> None:
+    async def fail(_: object) -> list:
+        raise EmbeddingError("boom") if failing == "embed" else FoodMatchingError("boom")
+
+    target = (
+        (food_embedder, "embed_queries") if failing == "embed" else (food_matcher, "match_foods")
+    )
+    monkeypatch.setattr(*target, fail)
+    add_chart_food("banana")
+    claude_items[:] = [dal("kela")]
+    body = post_eating()
+
+    assert logging_status(body["id"]) == "failed"
+    assert tracker_rows() == []
+    assert aliases() == {}
+    assert list(chart_rows()) == ["banana"]

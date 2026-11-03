@@ -7,12 +7,24 @@
     save (save_voice_update) ─┬─ not eating → END
                               └─ accepted → ⏸ pause: the service commits and responds 200
                                             ↓ resumed by a background task
-                                 lookup_foods ─┬─ all known ─────────────────────┐
-                                               └─ new foods → estimate_nutrition ┴→ save_food_logs
+                                 lookup_foods ─┬─ all known ──────────────────────┐
+                                               └─ new names → find_similar_foods  │
+                                                  ├─ similar → match_foods        │
+                                                  │    ├─ all matched ────────────┤
+                                                  │    └─ some unmatched ─┐       │
+                                                  └─ none similar ────────┤       │
+                                                     estimate_nutrition ←─┘       │
+                                                     → embed_new_foods ───────────┴→ save_food_logs
 
 An eating update is all or nothing: it is "accepted" only when Claude understood what, when and
 how much for every item. Otherwise it is "needs_detail", no food item is kept and nothing is
 saved.
+
+A name not in the calorie chart may still be a food that is: "kela" when banana is there.
+find_similar_foods embeds the name with Voyage and takes the nearest chart foods; match_foods asks
+Claude whether one of them is the same food. A match is saved as an alias (kela → banana), so the
+next "kela" is found by lookup_foods with no embedding or Claude call. Only foods with no match
+are estimated, and each new chart food is stored with its embedding.
 
 The run pauses before lookup_foods so the response doesn't wait on the nutrition lookup and the
 Claude estimate. The paused state lives in an in-memory checkpointer, keyed by the voice update
@@ -36,8 +48,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import EatingTrackerEntry, VoiceUpdate
 from app.repositories.calorie_chart_repository import CalorieChartRepository
 from app.repositories.eating_tracker_repository import EatingTrackerRepository
+from app.repositories.food_alias_repository import FoodAliasRepository
 from app.repositories.voice_update_repository import VoiceUpdateRepository
-from app.services import eating_classifier, food_extractor, nutrition_estimator
+from app.services import (
+    eating_classifier,
+    food_embedder,
+    food_extractor,
+    food_matcher,
+    nutrition_estimator,
+)
 from app.services.food_extractor import ExtractedFoodItem
 from app.services.meal_time import Meal, meal_at, resolve_consumed_at
 from app.services.nutrition import consumed_nutrition
@@ -48,6 +67,8 @@ MissingDetail = Literal["what", "when", "how_much"]
 
 # The node the run pauses before; the background task resumes from here.
 RESUME_NODE = "lookup_foods"
+# How many of the nearest chart foods Claude is shown for each new name.
+SIMILAR_FOODS_LIMIT = 5
 
 
 @dataclass(frozen=True)
@@ -61,6 +82,21 @@ class FoodItem:
     quantity_is_default: bool
     consumed_at: datetime  # in the recording's own UTC offset
     meal: Meal
+
+
+@dataclass(frozen=True)
+class FoodCandidate:
+    """A chart food whose embedding is close to a new name's."""
+
+    id: uuid.UUID
+    food_item: str
+    search_text: str
+
+
+@dataclass(frozen=True)
+class FoodEmbedding:
+    search_text: str
+    embedding: list[float]
 
 
 class VoiceUpdateState(TypedDict):
@@ -79,7 +115,12 @@ class VoiceUpdateState(TypedDict):
     voice_update_created_at: NotRequired[datetime]
     # Foods not in calorie_chart: {canonical name: everyday unit said}
     unknown_foods: NotRequired[dict[str, str]]
+    # Nearest chart foods per unknown name; names with none are left out
+    candidates: NotRequired[dict[str, list[FoodCandidate]]]
+    # Unknown names Claude found to be a chart food: {name: chart food id}
+    matches: NotRequired[dict[str, uuid.UUID]]
     estimates: NotRequired[dict[str, FoodNutrition]]
+    new_food_embeddings: NotRequired[dict[str, FoodEmbedding]]
 
 
 @dataclass(frozen=True)
@@ -181,32 +222,98 @@ def route_after_save(state: VoiceUpdateState) -> str:
 async def lookup_foods(state: VoiceUpdateState, runtime: Runtime[VoiceUpdateContext]) -> dict:
     db = runtime.context.db
     units = {item.canonical_name: item.everyday_unit for item in state["food_items"]}
-    known = {food.food_item for food in await CalorieChartRepository(db).get_by_names(units)}
-    # End the read-only transaction so no DB connection is held during the Claude call.
+    known = await CalorieChartRepository(db).get_by_names(units)
+    # End the read-only transaction so no DB connection is held during the AI calls.
     await db.rollback()
     return {"unknown_foods": {name: unit for name, unit in units.items() if name not in known}}
 
 
 def route_after_lookup(state: VoiceUpdateState) -> str:
-    return "estimate_nutrition" if state["unknown_foods"] else "save_food_logs"
+    return "find_similar_foods" if state["unknown_foods"] else "save_food_logs"
+
+
+async def find_similar_foods(state: VoiceUpdateState, runtime: Runtime[VoiceUpdateContext]) -> dict:
+    names = list(state["unknown_foods"])
+    # Embed before touching the DB, so no connection is held while waiting on Voyage.
+    vectors = await food_embedder.embed_queries(names)
+    db = runtime.context.db
+    chart = CalorieChartRepository(db)
+    candidates = {}
+    for name, vector in zip(names, vectors, strict=True):
+        nearest = await chart.nearest(vector, SIMILAR_FOODS_LIMIT)
+        if nearest:
+            candidates[name] = [
+                FoodCandidate(
+                    id=f.id, food_item=f.food_item, search_text=f.search_text or f.food_item
+                )
+                for f in nearest
+            ]
+    await db.rollback()
+    return {"candidates": candidates}
+
+
+def route_after_find_similar(state: VoiceUpdateState) -> str:
+    return "match_foods" if state["candidates"] else "estimate_nutrition"
+
+
+async def match_foods(state: VoiceUpdateState) -> dict:
+    candidates = state["candidates"]
+    matched = await food_matcher.match_foods(
+        {name: {c.food_item: c.search_text for c in found} for name, found in candidates.items()}
+    )
+    ids = {name: {c.food_item: c.id for c in found} for name, found in candidates.items()}
+    return {"matches": {name: ids[name][food_item] for name, food_item in matched.items()}}
+
+
+def route_after_match(state: VoiceUpdateState) -> str:
+    unmatched = state["unknown_foods"].keys() - state["matches"].keys()
+    return "estimate_nutrition" if unmatched else "save_food_logs"
 
 
 async def estimate_nutrition(state: VoiceUpdateState) -> dict:
-    return {"estimates": await nutrition_estimator.estimate_nutrition(state["unknown_foods"])}
+    matches = state.get("matches", {})
+    unmatched = {name: unit for name, unit in state["unknown_foods"].items() if name not in matches}
+    return {"estimates": await nutrition_estimator.estimate_nutrition(unmatched)}
+
+
+async def embed_new_foods(state: VoiceUpdateState) -> dict:
+    texts = {
+        name: food_embedder.search_text(name, food.aliases)
+        for name, food in state["estimates"].items()
+    }
+    vectors = await food_embedder.embed_documents(list(texts.values()))
+    return {
+        "new_food_embeddings": {
+            name: FoodEmbedding(search_text=text, embedding=vector)
+            for (name, text), vector in zip(texts.items(), vectors, strict=True)
+        }
+    }
 
 
 async def save_food_logs(state: VoiceUpdateState, runtime: Runtime[VoiceUpdateContext]) -> dict:
     # Stages rows only; the caller owns the transaction and commits.
     db = runtime.context.db
     chart = CalorieChartRepository(db)
+    embeddings = state.get("new_food_embeddings", {})
     await chart.add_missing(
         [
-            {**food.model_dump(exclude={"metric_unit"}), "metric_unit_name": food.metric_unit}
-            for food in state.get("estimates", {}).values()
+            {
+                **food.model_dump(exclude={"metric_unit", "aliases"}),
+                "metric_unit_name": food.metric_unit,
+                "search_text": embeddings[name].search_text,
+                "embedding": embeddings[name].embedding,
+            }
+            for name, food in state.get("estimates", {}).items()
+        ]
+    )
+    await FoodAliasRepository(db).add_missing(
+        [
+            {"alias": name, "food_item_id": food_id}
+            for name, food_id in state.get("matches", {}).items()
         ]
     )
     items = state["food_items"]
-    foods = {f.food_item: f for f in await chart.get_by_names({i.canonical_name for i in items})}
+    foods = await chart.get_by_names({i.canonical_name for i in items})
     entries = []
     for item in items:
         food = foods[item.canonical_name]
@@ -243,7 +350,10 @@ def build_voice_update_graph():
     graph.add_node(extract_food_items)
     graph.add_node(save_voice_update)
     graph.add_node(lookup_foods)
+    graph.add_node(find_similar_foods)
+    graph.add_node(match_foods)
     graph.add_node(estimate_nutrition)
+    graph.add_node(embed_new_foods)
     graph.add_node(save_food_logs)
     # All AI calls run before touching the DB, so no connection is held while waiting on them.
     graph.add_edge(START, "classify_transcript")
@@ -255,14 +365,22 @@ def build_voice_update_graph():
     )
     graph.add_conditional_edges("save_voice_update", route_after_save, [RESUME_NODE, END])
     graph.add_conditional_edges(
-        "lookup_foods", route_after_lookup, ["estimate_nutrition", "save_food_logs"]
+        "lookup_foods", route_after_lookup, ["find_similar_foods", "save_food_logs"]
     )
-    graph.add_edge("estimate_nutrition", "save_food_logs")
+    graph.add_conditional_edges(
+        "find_similar_foods", route_after_find_similar, ["match_foods", "estimate_nutrition"]
+    )
+    graph.add_conditional_edges(
+        "match_foods", route_after_match, ["estimate_nutrition", "save_food_logs"]
+    )
+    graph.add_edge("estimate_nutrition", "embed_new_foods")
+    graph.add_edge("embed_new_foods", "save_food_logs")
     graph.add_edge("save_food_logs", END)
     # Only our own state types may be loaded back from a checkpoint.
     serde = JsonPlusSerializer(
         allowed_msgpack_modules=[
-            (t.__module__, t.__name__) for t in (FoodItem, Meal, FoodNutrition)
+            (t.__module__, t.__name__)
+            for t in (FoodItem, Meal, FoodNutrition, FoodCandidate, FoodEmbedding)
         ]
     )
     return graph.compile(checkpointer=InMemorySaver(serde=serde), interrupt_before=[RESUME_NODE])

@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     # Anthropic key for Claude (food extraction).
     anthropic_api_key: str | None = None
 
+    # Voyage AI key for food-name embeddings (finding a food already in the calorie chart).
+    voyage_api_key: str | None = None
+
     @field_validator("database_url", "database_url_unpooled")
     @classmethod
     def _use_psycopg_driver(cls, url: str | None) -> str | None:
