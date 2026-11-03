@@ -8,7 +8,7 @@ quantities and meal time, and logs calories and macros for you.
 
 - **Google sign-in** on iOS, Android and web. Sessions use short-lived access tokens and refresh
   tokens, so users stay signed in until they've been inactive for 30 days.
-- **Voice food logging (API only).** `POST /v1/voice-update` takes a transcript and a timestamp:
+- **Voice food logging.** `POST /v1/voice-update` takes a transcript and a timestamp:
   1. JEV (TypeSafe AI) decides whether the transcript is about eating.
   2. Claude pulls out each food, how much was eaten and when. If anything is unclear, the API
      returns `422 needs_detail` saying what's missing (what / when / how much) and stores nothing.
@@ -18,14 +18,12 @@ quantities and meal time, and logs calories and macros for you.
   100 g / 100 ml estimated by Claude and is added to the chart. A different name for a food we
   already have ("kela" for banana) is matched by meaning (Voyage AI embeddings + pgvector, then
   Claude confirms). The match is saved as an alias, so next time it's an exact lookup.
-
-The app itself has only the sign-in screen so far. Voice logging is reachable through the API
-(try it at http://localhost:8000/docs).
+- **Recording and voice logging in the app.** Record what you ate in the app and it's sent to
+  the API to be logged.
+- **Daily food log** in the app, with calorie and macro totals for the day.
 
 ## Planned
 
-- Recording and voice logging in the app
-- Daily food log and calorie / macro totals in the app
 - Fitness tracking
 - Insights across food and fitness
 
