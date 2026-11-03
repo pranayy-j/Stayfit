@@ -42,6 +42,21 @@ uv run alembic revision --autogenerate -m "describe change"   # after editing ap
 uv run alembic upgrade head
 ```
 
+## Finding foods already in the calorie chart
+
+A food name not in `calorie_chart` (say "kela") may be a food that is (banana). Chart foods are
+embedded with Voyage AI (`VOYAGE_API_KEY`) into the pgvector column `calorie_chart.embedding`;
+a new name's nearest foods go to Claude, which says whether one is the same food. A match is
+saved in `food_aliases`, so the next "kela" is an exact lookup. See
+`app/workflows/voice_update_graph.py`.
+
+Foods added before this have no embedding and are found by exact name only. Embed them once,
+after migrating:
+
+```bash
+uv run python -m scripts.backfill_food_embeddings
+```
+
 ## Test & lint
 
 Tests run against a local Postgres (`docker compose up -d`), never Neon: `tests/conftest.py`

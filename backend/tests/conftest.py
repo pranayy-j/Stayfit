@@ -46,5 +46,8 @@ def _clean_tables() -> None:
     yield
     with engine.begin() as conn:
         conn.execute(
-            text("TRUNCATE users, voice_updates, auth_sessions, eating_tracker, calorie_chart")
+            text(
+                "TRUNCATE users, voice_updates, auth_sessions, eating_tracker, food_aliases, "
+                "calorie_chart"
+            )
         )

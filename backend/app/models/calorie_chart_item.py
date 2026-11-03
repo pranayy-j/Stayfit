@@ -1,10 +1,14 @@
 import uuid
 from datetime import datetime
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import CheckConstraint, DateTime, Numeric, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
+
+# Size of a voyage-4 embedding (its default output_dimension).
+EMBEDDING_DIMENSIONS = 1024
 
 
 class CalorieChartItem(Base):
@@ -28,4 +32,9 @@ class CalorieChartItem(Base):
     carbs_g_per_100: Mapped[float] = mapped_column(Numeric(7, 2, asdecimal=False))
     fats_g_per_100: Mapped[float] = mapped_column(Numeric(7, 2, asdecimal=False))
     fibre_g_per_100: Mapped[float] = mapped_column(Numeric(7, 2, asdecimal=False))
+    # The name plus its other names, e.g. "kela | banana, kele"; the text `embedding` encodes.
+    # Kept so embeddings can be rebuilt when the embedding model changes.
+    search_text: Mapped[str | None] = mapped_column(String(512))
+    # Null for foods added before semantic search; those are found by exact name only.
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIMENSIONS))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

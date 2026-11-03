@@ -24,6 +24,11 @@ class FoodNutrition(BaseModel):
     """Typical nutrition of one food, per 100 g or 100 ml as eaten."""
 
     food_item: str = Field(description="The food name exactly as given.")
+    aliases: list[str] = Field(
+        description="Other common names for exactly this food, lowercase and singular: its "
+        "English name if the given name is not English, and its common Hindi or Hinglish "
+        'names in Latin script, e.g. "banana", "kele" for kela. Empty if there are none.'
+    )
     metric_unit: Literal["g", "ml"] = Field(
         description="ml for drinks and other foods measured by volume, g for everything else."
     )

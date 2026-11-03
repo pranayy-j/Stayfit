@@ -29,6 +29,7 @@ def stub_claude(monkeypatch: pytest.MonkeyPatch, result: dict) -> list:
 def estimate(name: str) -> dict:
     return {
         "food_item": name,
+        "aliases": [],
         "metric_unit": "g",
         "everyday_unit_name": "piece",
         "grams_per_everyday_unit": 30,

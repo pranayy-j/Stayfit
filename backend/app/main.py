@@ -7,7 +7,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.controllers import auth, health, voice_update
 from app.db import async_engine
-from app.services import eating_classifier, food_extractor, nutrition_estimator
+from app.services import (
+    eating_classifier,
+    food_embedder,
+    food_extractor,
+    food_matcher,
+    nutrition_estimator,
+)
 
 
 @asynccontextmanager
@@ -15,6 +21,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     yield
     await eating_classifier.close_client()
     await food_extractor.close_client()
+    await food_matcher.close_client()
+    await food_embedder.close_client()
     await nutrition_estimator.close_client()
     await async_engine.dispose()
 
